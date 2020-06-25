@@ -2,6 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <chrono>
 
 #include <windows.h>
 
@@ -342,9 +343,39 @@ int main()
     pipeline_layout_info.pushConstantRangeCount = 0;
     vk::UniquePipelineLayout pipeline_layout = device->createPipelineLayoutUnique(pipeline_layout_info);
 
+
+    // Create depth buffer
+
+    vk::ImageCreateInfo depth_info;
+    depth_info.imageType = vk::ImageType::e2D;
+    depth_info.format = vk::Format::eD16Unorm;
+    depth_info.extent = vk::Extent3D(surface_caps.currentExtent, 1);
+    depth_info.mipLevels = 1;
+    depth_info.arrayLayers = 1;
+    depth_info.samples = vk::SampleCountFlagBits::e1;
+    depth_info.tiling = vk::ImageTiling::eOptimal; // check support
+    depth_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eInputAttachment;
+    depth_info.initialLayout = vk::ImageLayout::eUndefined;
+    vk::UniqueImage depth = device->createImageUnique(depth_info);
+    vk::MemoryRequirements depth_mem_req = device->getImageMemoryRequirements(*depth);
+    uint32_t depth_mem_idx = find_memory(depth_mem_req, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    vk::UniqueDeviceMemory depth_mem = device->allocateMemoryUnique({ depth_mem_req.size, depth_mem_idx });
+    device->bindImageMemory(*depth, *depth_mem, 0);
+    vk::ImageViewCreateInfo depth_view_info;
+    depth_view_info.image = *depth;
+    depth_view_info.viewType = vk::ImageViewType::e2D;
+    depth_view_info.format = depth_info.format;
+    depth_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+    depth_view_info.subresourceRange.baseArrayLayer = 0;
+    depth_view_info.subresourceRange.baseMipLevel = 0;
+    depth_view_info.subresourceRange.layerCount = 1;
+    depth_view_info.subresourceRange.levelCount = 1;
+    vk::UniqueImageView depth_view = device->createImageViewUnique(depth_view_info);
+
+
     // Create Renderpass
 
-    std::array<vk::AttachmentDescription, 1> renderpass_attachments;
+    std::array<vk::AttachmentDescription, 2> renderpass_attachments;
     // color buffer
     renderpass_attachments[0].format = swapchain_info.imageFormat;
     renderpass_attachments[0].samples = vk::SampleCountFlagBits::e1;
@@ -354,15 +385,29 @@ int main()
     renderpass_attachments[0].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
     renderpass_attachments[0].initialLayout = vk::ImageLayout::eColorAttachmentOptimal;
     renderpass_attachments[0].finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    // depth buffer
+    renderpass_attachments[1].format = depth_info.format;
+    renderpass_attachments[1].samples = vk::SampleCountFlagBits::e1;
+    renderpass_attachments[1].loadOp = vk::AttachmentLoadOp::eClear;
+    renderpass_attachments[1].storeOp = vk::AttachmentStoreOp::eDontCare;
+    renderpass_attachments[1].stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    renderpass_attachments[1].stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    renderpass_attachments[1].initialLayout = vk::ImageLayout::eUndefined;
+    renderpass_attachments[1].finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
     std::array<vk::SubpassDescription, 1> renderpass_subpasses;
 
-    std::array<vk::AttachmentReference, 1> renderpass_references_first;
-    renderpass_references_first[0].attachment = 0;
-    renderpass_references_first[0].layout = vk::ImageLayout::eColorAttachmentOptimal;
+    vk::AttachmentReference renderpass_references_first;
+    renderpass_references_first.attachment = 0;
+    renderpass_references_first.layout = vk::ImageLayout::eColorAttachmentOptimal;
+    vk::AttachmentReference renderpass_references_first_depth;
+    renderpass_references_first_depth.attachment = 1; // depth
+    renderpass_references_first_depth.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
     renderpass_subpasses[0].pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
-    renderpass_subpasses[0].colorAttachmentCount = (uint32_t)renderpass_references_first.size();
-    renderpass_subpasses[0].pColorAttachments = renderpass_references_first.data();
+    renderpass_subpasses[0].colorAttachmentCount = 1;
+    renderpass_subpasses[0].pColorAttachments = &renderpass_references_first;
+    renderpass_subpasses[0].pDepthStencilAttachment = &renderpass_references_first_depth;
 
     vk::RenderPassCreateInfo renderpass_info;
     renderpass_info.attachmentCount = (uint32_t)renderpass_attachments.size();
@@ -422,8 +467,8 @@ int main()
     pipeline_multisample.sampleShadingEnable = false;
 
     vk::PipelineDepthStencilStateCreateInfo pipeline_depth;
-    pipeline_depth.depthTestEnable = false;
-    pipeline_depth.depthWriteEnable = false;
+    pipeline_depth.depthTestEnable = true;
+    pipeline_depth.depthWriteEnable = true;
     pipeline_depth.depthCompareOp = vk::CompareOp::eLess;
     pipeline_depth.depthBoundsTestEnable = false;
     pipeline_depth.stencilTestEnable = false;
@@ -541,7 +586,7 @@ int main()
         for (auto& m : meshes)
         {
             m.off_uniform = reinterpret_cast<uint8_t*>(uniform) - reinterpret_cast<uint8_t*>(ptr);
-            uniform->model = glm::scale(glm::vec3(0.1f)) * m.model;
+            uniform->model = glm::scale(glm::vec3(0.01f)) * m.model;
             uniform->proj = glm::perspective(glm::radians(85.f), 
                 (float)surface_caps.currentExtent.width / (float)surface_caps.currentExtent.height, 1.0f, 1000.f);
             uniform->view = glm::lookAt(glm::vec3(0, 3, 30), glm::vec3(0), glm::vec3(0, -1, 0));
@@ -690,8 +735,9 @@ int main()
             view_info.subresourceRange.layerCount = 1;
             view_info.subresourceRange.levelCount = 1;
             swapchain_views[image_index] = device->createImageViewUnique(view_info);
-            std::array<vk::ImageView, 1> framebuffer_attachments{
+            std::vector<vk::ImageView> framebuffer_attachments{
                 *swapchain_views[image_index],
+                *depth_view,
             };
             vk::FramebufferCreateInfo framebuffer_info;
             framebuffer_info.renderPass = *renderpass;
@@ -703,8 +749,9 @@ int main()
             framebuffers[image_index] = device->createFramebufferUnique(framebuffer_info);
 
             std::array<float, 4> color_red = { 1.f, 0.f, 0.f, 1.f };
-            std::array<vk::ClearValue, 1> clear_values{
+            std::array<vk::ClearValue, 2> clear_values{
                 vk::ClearColorValue(color_red),
+                vk::ClearDepthStencilValue(1.f, 0),
             };
             vk::RenderPassBeginInfo renderpass_begin_info;
             renderpass_begin_info.renderPass = *renderpass;
@@ -737,6 +784,7 @@ int main()
     }
 
     vk::UniqueFence fence = device->createFenceUnique({});
+    auto start = std::chrono::high_resolution_clock::now();
     while (true)
     {
         MSG msg;
@@ -746,21 +794,26 @@ int main()
             DispatchMessage(&msg);
         }
 
+        auto now = std::chrono::high_resolution_clock::now();
+        float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - start).count();
+        start = now;
+
         auto next_image = device->acquireNextImageKHR(*swapchain, UINT64_MAX, nullptr, *fence);
 
         if (next_image.result == vk::Result::eSuccess)
         {
-            if (void* ptr = device->mapMemory(*scene_buffer_mem, 0, VK_WHOLE_SIZE))
+            if (void* ptr = device->mapMemory(*scene_buffer_mem, scene_tot_vertex_size, meshes.size() * sizeof(uniform_buffers_t)))
             {
                 static float angle = 0.f;
-                angle += 1;
-                glm::mat4 view = glm::lookAt(glm::vec3(glm::cos(glm::radians(angle)), 1, glm::sin(glm::radians(angle))) * 5.f, glm::vec3(0), glm::vec3(0, -1, 0));
-                uniform_buffers_t* uniform = reinterpret_cast<uniform_buffers_t*>(reinterpret_cast<uint8_t*>(ptr) + scene_tot_vertex_size);
+                angle += 10 * dt;
+                glm::mat4 view = glm::lookAt(glm::vec3(glm::cos(glm::radians(angle)), 1, glm::sin(glm::radians(angle))) * 2.f, glm::vec3(0), glm::vec3(0, -1, 0));
+                glm::mat4 proj = glm::perspective(glm::radians(85.f),
+                    (float)surface_caps.currentExtent.width / (float)surface_caps.currentExtent.height, 0.01f, 100.f);
+                uniform_buffers_t* uniform = reinterpret_cast<uniform_buffers_t*>(reinterpret_cast<uint8_t*>(ptr));
                 for (auto& m : meshes)
                 {
-                    uniform->model = glm::scale(glm::vec3(0.1f)) * m.model;
-                    uniform->proj = glm::perspective(glm::radians(85.f),
-                        (float)surface_caps.currentExtent.width / (float)surface_caps.currentExtent.height, 1.0f, 1000.f);
+                    uniform->model = glm::scale(glm::vec3(0.01f)) * m.model;
+                    uniform->proj = proj;
                     uniform->view = view;
                     uniform++;
                 }
