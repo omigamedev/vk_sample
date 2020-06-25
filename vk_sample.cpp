@@ -16,6 +16,14 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+#include <assimp/matrix4x4.h>
+
 vk::PhysicalDevice physical_device;
 vk::UniqueDevice device;
 
@@ -23,10 +31,12 @@ struct vertex_t
 {
     glm::vec3 pos;
     glm::vec3 nor;
+    glm::vec2 uvs;
     vertex_t() = default;
-    vertex_t(glm::vec3 pos) : pos(pos), nor(0) {}
-    vertex_t(glm::vec2 pos) : pos(glm::vec3(pos, 0)), nor(0) {}
-    vertex_t(glm::vec3 pos, glm::vec3 nor) : pos(pos), nor(nor) {}
+    vertex_t(glm::vec3 pos) : pos(pos), nor(0), uvs(0) {}
+    vertex_t(glm::vec2 pos) : pos(glm::vec3(pos, 0)), nor(0), uvs(0) {}
+    vertex_t(glm::vec3 pos, glm::vec3 nor) : pos(pos), nor(nor), uvs(0) {}
+    vertex_t(glm::vec3 pos, glm::vec3 nor, glm::vec2 uvs) : pos(pos), nor(nor), uvs(uvs) {}
 };
 
 struct uniform_buffers_t
@@ -40,6 +50,17 @@ struct uniform_buffers_t
     glm::vec4 col;
     uint8_t pad3[0x100 - sizeof(col) & ~0x100]; // alignment
 };
+
+struct mesh_t
+{
+    std::vector<vertex_t> vertices;
+    std::vector<uint32_t> indices;
+    glm::mat4 model;
+    vk::DeviceSize off_index;
+    vk::DeviceSize off_vertex;
+    vk::DeviceSize off_uniform;
+};
+
 
 vk::UniqueShaderModule load_shader_module(const std::string& path)
 {
@@ -176,21 +197,100 @@ int main()
     vk::CommandPoolCreateInfo cmd_pool_info;
     cmd_pool_info.queueFamilyIndex = device_family_index;
     vk::UniqueCommandPool cmd_pool = device->createCommandPoolUnique(cmd_pool_info);
+    
 
-    std::vector<vk::DescriptorPoolSize> descrpool_sizes{
-        vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, 1 },
-    };
-    vk::UniqueDescriptorPool descrpool = device->createDescriptorPoolUnique({ {}, 1, 
-        (uint32_t)descrpool_sizes.size(), descrpool_sizes.data() });
+    // Load texture
+
+    int tex_width = 0;
+    int tex_height = 0;
+    int tex_comp = 0;
+    auto tex_data = std::unique_ptr<uint8_t[]>(stbi_load("donuts.jpg", &tex_width, &tex_height, &tex_comp, 4));
+
+    vk::ImageCreateInfo tex_info;
+    tex_info.imageType = vk::ImageType::e2D;
+    tex_info.format = vk::Format::eR8G8B8A8Unorm;
+    tex_info.extent = vk::Extent3D(tex_width, tex_height, 1);
+    tex_info.mipLevels = 1;
+    tex_info.arrayLayers = 1;
+    tex_info.samples = vk::SampleCountFlagBits::e1;
+    tex_info.tiling = vk::ImageTiling::eLinear;
+    tex_info.usage = vk::ImageUsageFlagBits::eSampled;
+    tex_info.initialLayout = vk::ImageLayout::ePreinitialized;
+    vk::UniqueImage tex = device->createImageUnique(tex_info);
+    vk::MemoryRequirements tex_mem_req = device->getImageMemoryRequirements(*tex);
+    uint32_t tex_mem_idx = find_memory(tex_mem_req,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::UniqueDeviceMemory tex_mem = device->allocateMemoryUnique(vk::MemoryAllocateInfo(tex_mem_req.size, tex_mem_idx));
+    vk::SubresourceLayout tex_layout = device->getImageSubresourceLayout(*tex, vk::ImageSubresource(vk::ImageAspectFlagBits::eColor, 0, 0));
+    device->bindImageMemory(*tex, *tex_mem, 0);
+    if (void* ptr = device->mapMemory(*tex_mem, 0, VK_WHOLE_SIZE))
+    {
+        for (int row = 0; row < tex_height; row++)
+            std::copy_n(
+                tex_data.get() + row * tex_width * 4, 
+                tex_width * 4, 
+                reinterpret_cast<uint8_t*>(ptr) + row * tex_layout.rowPitch);
+        device->unmapMemory(*tex_mem);
+    }
+
+    vk::ImageViewCreateInfo tex_view_info;
+    tex_view_info.image = *tex;
+    tex_view_info.viewType = vk::ImageViewType::e2D;
+    tex_view_info.format = tex_info.format;
+    tex_view_info.components = vk::ComponentMapping();
+    tex_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    tex_view_info.subresourceRange.baseMipLevel = 0;
+    tex_view_info.subresourceRange.levelCount = 1;
+    tex_view_info.subresourceRange.baseArrayLayer = 0;
+    tex_view_info.subresourceRange.layerCount = 1;
+    vk::UniqueImageView tex_view = device->createImageViewUnique(tex_view_info);
+    
+    vk::SamplerCreateInfo sampler_info;
+    vk::UniqueSampler sampler = device->createSamplerUnique(sampler_info);
+
+    vk::CommandBufferAllocateInfo cmd_tex_info;
+    cmd_tex_info.commandPool = *cmd_pool;
+    cmd_tex_info.level = vk::CommandBufferLevel::ePrimary;
+    cmd_tex_info.commandBufferCount = 1;
+    auto cmd_tex = std::move(device->allocateCommandBuffersUnique(cmd_tex_info).front());
+    cmd_tex->begin(vk::CommandBufferBeginInfo({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit }));
+    {
+        vk::ImageMemoryBarrier barrier;
+        barrier.image = *tex;
+        barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        barrier.srcAccessMask = {};
+        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+        barrier.oldLayout = vk::ImageLayout::ePreinitialized;
+        barrier.newLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        cmd_tex->pipelineBarrier(
+            vk::PipelineStageFlagBits::eAllCommands,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion,
+            nullptr, nullptr, barrier);
+    }
+    cmd_tex->end();
+
+    vk::CommandBuffer cmd_tex_buf = *cmd_tex;
+    vk::SubmitInfo tex_submit_info;
+    tex_submit_info.commandBufferCount = 1;
+    tex_submit_info.pCommandBuffers = &cmd_tex_buf;
+    q.submit(tex_submit_info, nullptr);
+    q.waitIdle();
+
 
     // Create quad buffers
     
     std::vector<uint32_t> quad_indices{ 0, 1, 2, 0, 2, 3 };
     std::vector<vertex_t> quad_vertives{
-        glm::vec3(-1,  1, 0),
-        glm::vec3(-1, -1, 0),
-        glm::vec3( 1, -1, 0),
-        glm::vec3( 1,  1, 0),
+        { glm::vec3(-1,  1, 0), glm::vec3(), glm::vec2(0, 0) },
+        { glm::vec3(-1, -1, 0), glm::vec3(), glm::vec2(0, 1) },
+        { glm::vec3( 1, -1, 0), glm::vec3(), glm::vec2(1, 1) },
+        { glm::vec3( 1,  1, 0), glm::vec3(), glm::vec2(1, 0) },
     };
     vk::BufferCreateInfo quad_buffers_info;
     quad_buffers_info.flags = {};
@@ -228,6 +328,7 @@ int main()
 
     std::vector<vk::DescriptorSetLayoutBinding> descrset_layout_bindings{
         vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex),
+        vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment),
         //vk::DescriptorSetLayoutBinding(1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eFragment),
     };
     vk::DescriptorSetLayoutCreateInfo descrset_layout_info;
@@ -287,6 +388,7 @@ int main()
     };
     std::vector<vk::VertexInputAttributeDescription> pipeline_input_attributes{
         vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(vertex_t, pos)),
+        vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(vertex_t, uvs)),
     };
     vk::PipelineVertexInputStateCreateInfo pipeline_input;
     pipeline_input.vertexBindingDescriptionCount = (uint32_t)pipeline_input_bindings.size();
@@ -356,6 +458,132 @@ int main()
     pipeline_info.subpass = 0;
     vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipeline_info);
 
+    // Load scene
+    vk::DeviceSize scene_tot_vertex_size = 0;
+    std::vector<mesh_t> meshes;
+    Assimp::Importer imp;
+    const aiScene* scene = imp.ReadFile("data\\buildings.fbx", aiProcessPreset_TargetRealtime_Fast);
+    for (UINT mesh_index = 0; mesh_index < scene->mNumMeshes; mesh_index++)
+    {
+        mesh_t& m = meshes.emplace_back();
+        aiMesh* mesh = scene->mMeshes[mesh_index];
+        m.vertices = std::vector<vertex_t>(mesh->mNumVertices);
+        for (UINT vertex_index = 0; vertex_index < mesh->mNumVertices; vertex_index++)
+        {
+            m.vertices[vertex_index].pos.x = mesh->mVertices[vertex_index].x;
+            m.vertices[vertex_index].pos.y = mesh->mVertices[vertex_index].y;
+            m.vertices[vertex_index].pos.z = mesh->mVertices[vertex_index].z;
+            m.vertices[vertex_index].nor.x = -mesh->mNormals[vertex_index].x;
+            m.vertices[vertex_index].nor.y = -mesh->mNormals[vertex_index].y;
+            m.vertices[vertex_index].nor.z = -mesh->mNormals[vertex_index].z;
+            m.vertices[vertex_index].uvs.x = mesh->mTextureCoords[0][vertex_index].x;
+            m.vertices[vertex_index].uvs.y = mesh->mTextureCoords[0][vertex_index].y;
+        }
+        m.indices = std::vector<uint32_t>(mesh->mNumFaces * 3);
+        for (UINT face_index = 0; face_index < mesh->mNumFaces; face_index++)
+        {
+            aiFace& face = mesh->mFaces[face_index];
+            for (UINT index = 0; index < face.mNumIndices; index++)
+                m.indices[face_index * 3 + index] = face.mIndices[index];
+        }
+        scene_tot_vertex_size += mesh->mNumVertices * sizeof(vertex_t);
+        scene_tot_vertex_size += mesh->mNumFaces * 3 * sizeof(uint32_t);
+    }
+    aiNode* root = scene->mRootNode;
+    std::vector<glm::mat4> matrices(root->mNumChildren);
+    for (UINT child_index = 0; child_index < root->mNumChildren; child_index++)
+    {
+        aiNode* child = root->mChildren[child_index];
+        if (child->mNumMeshes == 1)
+        {
+            UINT mesh_index = child->mMeshes[0];
+            matrices[mesh_index] = glm::transpose(glm::make_mat4(reinterpret_cast<float*>(&child->mTransformation)));
+        }
+    }
+
+    scene_tot_vertex_size = ((scene_tot_vertex_size - 1) & (~0xFF)) + 0x100;
+
+    vk::BufferCreateInfo scene_buffer_info;
+    scene_buffer_info.size = scene_tot_vertex_size + meshes.size() * sizeof(uniform_buffers_t);
+    scene_buffer_info.usage = vk::BufferUsageFlagBits::eVertexBuffer | 
+        vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eUniformBuffer;
+    vk::UniqueBuffer scene_buffer = device->createBufferUnique(scene_buffer_info);
+
+    vk::MemoryRequirements scene_buffer_req = device->getBufferMemoryRequirements(*scene_buffer);
+    uint32_t scene_buffer_mem_idx = find_memory(scene_buffer_req,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::UniqueDeviceMemory scene_buffer_mem = device->allocateMemoryUnique(vk::MemoryAllocateInfo(scene_buffer_req.size, scene_buffer_mem_idx));
+    device->bindBufferMemory(*scene_buffer, *scene_buffer_mem, 0);
+
+    for (UINT mesh_index = 0; mesh_index < meshes.size(); mesh_index++)
+    {
+        meshes[mesh_index].model = matrices[mesh_index];
+    }
+
+    if (void* ptr = device->mapMemory(*scene_buffer_mem, 0, VK_WHOLE_SIZE))
+    {
+        uint32_t* idx_2 = reinterpret_cast<uint32_t*>(ptr);
+        uint32_t* idx = reinterpret_cast<uint32_t*>(ptr);
+        for (auto& m : meshes)
+        {
+            std::copy(m.indices.begin(), m.indices.end(), idx);
+            m.off_index = reinterpret_cast<uint8_t*>(idx) - reinterpret_cast<uint8_t*>(ptr);
+            idx += m.indices.size();
+        }
+        vertex_t* vtx = reinterpret_cast<vertex_t*>(idx);
+        for (auto& m : meshes)
+        {
+            std::copy(m.vertices.begin(), m.vertices.end(), vtx);
+            m.off_vertex = reinterpret_cast<uint8_t*>(vtx) - reinterpret_cast<uint8_t*>(ptr);
+            vtx += m.vertices.size();
+        }
+        uniform_buffers_t* uniform = reinterpret_cast<uniform_buffers_t*>(reinterpret_cast<uint8_t*>(ptr) + scene_tot_vertex_size);
+        for (auto& m : meshes)
+        {
+            m.off_uniform = reinterpret_cast<uint8_t*>(uniform) - reinterpret_cast<uint8_t*>(ptr);
+            uniform->model = glm::scale(glm::vec3(0.1f)) * m.model;
+            uniform->proj = glm::perspective(glm::radians(85.f), 
+                (float)surface_caps.currentExtent.width / (float)surface_caps.currentExtent.height, 1.0f, 1000.f);
+            uniform->view = glm::lookAt(glm::vec3(0, 3, 30), glm::vec3(0), glm::vec3(0, -1, 0));
+            uniform++;
+        }
+        device->unmapMemory(*scene_buffer_mem);
+    }
+
+    std::vector<vk::DescriptorPoolSize> descrpool_sizes{
+        vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, (uint32_t)(1 + meshes.size()) },
+        vk::DescriptorPoolSize{ vk::DescriptorType::eSampledImage, (uint32_t)(1 + meshes.size()) },
+    };
+    vk::UniqueDescriptorPool descrpool = device->createDescriptorPoolUnique({ {}, 2 + (uint32_t)meshes.size() * 2,
+        (uint32_t)descrpool_sizes.size(), descrpool_sizes.data() });
+
+    std::vector<vk::DescriptorSetLayout> scene_descr_sets_layouts(meshes.size(), *descrset_layout);
+    std::vector<vk::UniqueDescriptorSet> scene_descr_sets = device->allocateDescriptorSetsUnique({ *descrpool,
+        (uint32_t)scene_descr_sets_layouts.size(), scene_descr_sets_layouts.data() });
+
+    for (UINT mesh_index = 0; mesh_index < meshes.size(); mesh_index++)
+    {
+        // model, view, proj
+        vk::DescriptorBufferInfo descr_sets_buffer;
+        descr_sets_buffer.buffer = *scene_buffer;
+        descr_sets_buffer.offset = meshes[mesh_index].off_uniform;
+        descr_sets_buffer.range = uniform_buffers_t::mvp_size;
+
+        vk::DescriptorImageInfo descr_sets_tex;
+        descr_sets_tex.sampler = *sampler;
+        descr_sets_tex.imageView = *tex_view;
+        descr_sets_tex.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+        std::vector<vk::WriteDescriptorSet> descr_sets_write{
+            vk::WriteDescriptorSet(*scene_descr_sets[mesh_index], 0, 0, 1,
+                vk::DescriptorType::eUniformBuffer, nullptr, &descr_sets_buffer, nullptr),
+            vk::WriteDescriptorSet(*scene_descr_sets[mesh_index], 1, 0, 1,
+                vk::DescriptorType::eCombinedImageSampler, &descr_sets_tex, nullptr, nullptr),
+        };
+
+        device->updateDescriptorSets(descr_sets_write, nullptr);
+    }
+
     // Create descriptorsets
 
     std::vector<vk::DescriptorSetLayout> descr_sets_layouts(1, *descrset_layout);
@@ -367,9 +595,18 @@ int main()
     descr_sets_buffer.buffer = *quad_buffers;
     descr_sets_buffer.offset = uniform_offset;
     descr_sets_buffer.range = uniform_buffers_t::mvp_size;
+    
+    vk::DescriptorImageInfo descr_sets_tex;
+    descr_sets_tex.sampler = *sampler;
+    descr_sets_tex.imageView = *tex_view;
+    descr_sets_tex.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
-    vk::WriteDescriptorSet descr_sets_write(*descr_sets[0], 0, 0, 1,
-        vk::DescriptorType::eUniformBuffer, nullptr, &descr_sets_buffer, nullptr);
+    std::vector<vk::WriteDescriptorSet> descr_sets_write{
+        vk::WriteDescriptorSet(*descr_sets[0], 0, 0, 1,
+            vk::DescriptorType::eUniformBuffer, nullptr, &descr_sets_buffer, nullptr),
+        vk::WriteDescriptorSet(*descr_sets[0], 1, 0, 1,
+            vk::DescriptorType::eCombinedImageSampler, &descr_sets_tex, nullptr, nullptr),
+    };
 
     device->updateDescriptorSets(descr_sets_write, nullptr);
 
@@ -478,11 +715,20 @@ int main()
             renderpass_begin_info.pClearValues = clear_values.data();
             cmds[image_index]->beginRenderPass(renderpass_begin_info, vk::SubpassContents::eInline);
             {
-                cmds[image_index]->bindVertexBuffers(0, *quad_buffers, { quad_indices.size() * sizeof(uint32_t) });
-                cmds[image_index]->bindIndexBuffer(*quad_buffers, 0, vk::IndexType::eUint32);
                 cmds[image_index]->bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline);
-                cmds[image_index]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0, *descr_sets[0], {});
-                cmds[image_index]->drawIndexed((uint32_t)quad_indices.size(), 1, 0, 0, 0);
+                
+                //cmds[image_index]->bindVertexBuffers(0, *quad_buffers, { quad_indices.size() * sizeof(uint32_t) });
+                //cmds[image_index]->bindIndexBuffer(*quad_buffers, 0, vk::IndexType::eUint32);
+                //cmds[image_index]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0, *descr_sets[0], {});
+                //cmds[image_index]->drawIndexed((uint32_t)quad_indices.size(), 1, 0, 0, 0);
+
+                for (int mesh_index = 0; mesh_index < meshes.size(); mesh_index++)
+                {
+                    cmds[image_index]->bindVertexBuffers(0, *scene_buffer, { meshes[mesh_index].off_vertex });
+                    cmds[image_index]->bindIndexBuffer(*scene_buffer, meshes[mesh_index].off_index, vk::IndexType::eUint32);
+                    cmds[image_index]->bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0, *scene_descr_sets[mesh_index], {});
+                    cmds[image_index]->drawIndexed((uint32_t)meshes[mesh_index].indices.size(), 1, 0, 0, 0);
+                }
             }
             cmds[image_index]->endRenderPass();
         }
@@ -504,6 +750,23 @@ int main()
 
         if (next_image.result == vk::Result::eSuccess)
         {
+            if (void* ptr = device->mapMemory(*scene_buffer_mem, 0, VK_WHOLE_SIZE))
+            {
+                static float angle = 0.f;
+                angle += 1;
+                glm::mat4 view = glm::lookAt(glm::vec3(glm::cos(glm::radians(angle)), 1, glm::sin(glm::radians(angle))) * 5.f, glm::vec3(0), glm::vec3(0, -1, 0));
+                uniform_buffers_t* uniform = reinterpret_cast<uniform_buffers_t*>(reinterpret_cast<uint8_t*>(ptr) + scene_tot_vertex_size);
+                for (auto& m : meshes)
+                {
+                    uniform->model = glm::scale(glm::vec3(0.1f)) * m.model;
+                    uniform->proj = glm::perspective(glm::radians(85.f),
+                        (float)surface_caps.currentExtent.width / (float)surface_caps.currentExtent.height, 1.0f, 1000.f);
+                    uniform->view = view;
+                    uniform++;
+                }
+                device->unmapMemory(*scene_buffer_mem);
+            }
+
             vk::SubmitInfo submit_info;
             submit_info.commandBufferCount = (uint32_t)cmds_naked.size();
             submit_info.pCommandBuffers = cmds_naked.data();

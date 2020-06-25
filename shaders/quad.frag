@@ -1,8 +1,12 @@
 #version 450
 
+layout (binding = 1) uniform sampler2D tex;
+
+layout (location = 0) in vec2 f_uvs;
+
 layout (location = 0) out vec4 frag_color;
 
 void main()
 {
-    frag_color = vec4(0, 1, 0, 1);
+    frag_color = texture(tex, f_uvs);
 }

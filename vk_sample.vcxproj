@@ -45,12 +45,12 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;$(IncludePath)</IncludePath>
+    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
     <LibraryPath>C:\VulkanSDK\1.2.135.0\Lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;$(IncludePath)</IncludePath>
+    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
     <LibraryPath>C:\VulkanSDK\1.2.135.0\Lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -59,6 +59,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -74,6 +75,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -113,6 +115,14 @@
       <OutputItemType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">CopyFileToFolders</OutputItemType>
       <TreatOutputAsContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</TreatOutputAsContent>
     </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="libs\assimp\out\install\x64-Release\lib\assimp-vc142-mt.lib" />
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="libs\assimp\out\install\x64-Release\bin\assimp-vc142-mt.dll">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

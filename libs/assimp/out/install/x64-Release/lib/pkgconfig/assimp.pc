@@ -1,0 +1,11 @@
+prefix=D:/Dev/vkview/libs/assimp/out/install/x64-Release
+exec_prefix=D:/Dev/vkview/libs/assimp/out/install/x64-Release/
+libdir=D:/Dev/vkview/libs/assimp/out/install/x64-Release/lib
+includedir=D:/Dev/vkview/libs/assimp/out/install/x64-Release/include
+
+Name: Assimp
+Description: Import various well-known 3D model formats in an uniform manner.
+Version: 5.0.1
+Libs: -L${libdir} -lassimp
+Libs.private:  
+Cflags: -I${includedir}

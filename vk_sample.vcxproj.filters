@@ -17,6 +17,9 @@
       <UniqueIdentifier>{421d097d-2e6a-4993-b370-580c9774993c}</UniqueIdentifier>
       <Extensions>glsl;vert;frag</Extensions>
     </Filter>
+    <Filter Include="Libs">
+      <UniqueIdentifier>{5f8b614e-410f-40bd-82e4-bcc3f9b0a7e6}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="vk_sample.cpp">
@@ -30,5 +33,15 @@
     <CustomBuild Include="shaders\quad.vert">
       <Filter>Shaders</Filter>
     </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Library Include="libs\assimp\out\install\x64-Release\lib\assimp-vc142-mt.lib">
+      <Filter>Libs</Filter>
+    </Library>
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="libs\assimp\out\install\x64-Release\bin\assimp-vc142-mt.dll">
+      <Filter>Libs</Filter>
+    </CopyFileToFolders>
   </ItemGroup>
 </Project>
