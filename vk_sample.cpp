@@ -501,7 +501,7 @@ int main()
     pipeline_info.layout = *pipeline_layout;
     pipeline_info.renderPass = *renderpass;
     pipeline_info.subpass = 0;
-    vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipeline_info);
+    vk::UniquePipeline pipeline = device->createGraphicsPipelineUnique(nullptr, pipeline_info).value;
 
     // Load scene
     vk::DeviceSize scene_tot_vertex_size = 0;

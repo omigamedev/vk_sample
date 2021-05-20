@@ -45,13 +45,13 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
-    <LibraryPath>C:\VulkanSDK\1.2.135.0\Lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\VulkanSDK\1.2.162.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\VulkanSDK\1.2.162.0\Lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <IncludePath>C:\VulkanSDK\1.2.135.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
-    <LibraryPath>C:\VulkanSDK\1.2.135.0\Lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>C:\VulkanSDK\1.2.162.0\Include;libs\glm;libs\stb;libs\assimp\out\install\x64-Release\include;$(IncludePath)</IncludePath>
+    <LibraryPath>C:\VulkanSDK\1.2.162.0\Lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
